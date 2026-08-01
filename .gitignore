@@ -1,0 +1,21 @@
+# Zavisnosti
+node_modules/
+vendor/
+
+# Rezultati build-a
+frontend/build/
+backend/public/build/
+
+# Lokalna podesavanja
+.env
+*.local
+
+# Radni fajlovi
+qa-screenshots/
+*.log
+
+# Operativni sistem i editori
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
