@@ -1,0 +1,1379 @@
+openapi: 3.0.3
+info:
+  title: TravelSafe REST API
+  version: "1.0.0"
+  description: |
+    Swagger/OpenAPI specifikacija REST API-ja aplikacije **TravelSafe** (putno osiguranje).
+
+    Backend je Laravel 10, autentifikacija je preko **Laravel Sanctum** Bearer tokena.
+
+    ## Oblik odgovora
+    Svi odgovori kontrolera imaju isti omotač (`App\Traits\ApiResponse`):
+
+    ```json
+    { "success": true, "message": "OK", "data": {} }
+    ```
+
+    Greške koje generiše sam Laravel (validacija, autentifikacija, 404) vraćaju
+    kraći oblik: `{ "message": "..." }`, odnosno `{ "message": "...", "errors": {} }`.
+
+    ## Korisničke uloge
+    - **CLIENT** — unosi putovanja i putnike, podnosi zahtev za polisu, plaća.
+    - **AGENT** — odobrava (unosi cenu) ili odbija zahteve.
+    - **ADMIN** — korisnici, paketi i statistika; vidi sve.
+
+    ## Redosled za testiranje
+    1. `POST /api/auth/login` kao CLIENT (`ana@travelsafe.test` / `password`).
+       Token se automatski upisuje u **Authorize**.
+    2. `POST /api/travels` → kreiranje putovanja.
+    3. `POST /api/travels/{travel}/insured-persons` → bar jedan putnik.
+    4. `POST /api/policies` → zahtev prelazi u status `SUBMITTED`.
+    5. Login kao AGENT (`agent@travelsafe.test`) → `PATCH /api/policies/{policy}/approve`.
+    6. Login kao CLIENT → `PATCH /api/policies/{policy}/pay` → status `ACTIVE`.
+
+servers:
+  - url: http://localhost:8000
+    description: Lokalni razvojni server (php artisan serve / Docker)
+  - url: http://127.0.0.1:8000
+    description: Lokalni razvojni server (alternativna adresa)
+
+tags:
+  - name: Auth
+    description: Registracija, prijava, odjava i podaci o prijavljenom korisniku.
+  - name: Insurance Packages
+    description: Paketi osiguranja (pregled je javan, izmene su za ADMIN-a).
+  - name: Travels
+    description: Putovanja koja klijent prijavljuje.
+  - name: Insured Persons
+    description: Osobe osigurane u okviru jednog putovanja.
+  - name: Policies
+    description: Zahtevi i polise — ceo tok od podnošenja do aktivacije.
+  - name: Users
+    description: Administracija korisnika (samo ADMIN).
+  - name: Statistics
+    description: Osnovna statistika aplikacije (samo ADMIN).
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Sanctum
+      description: |
+        Token koji vraća `POST /api/auth/login` u polju `data.token`.
+        Unosi se kroz dugme **Authorize** (bez reči "Bearer", Swagger je sam dodaje).
+
+  schemas:
+    # ---------------------------------------------------------------- omotači
+    ApiResponse:
+      type: object
+      description: Zajednički omotač svih uspešnih odgovora.
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string, example: "OK" }
+        data:
+          nullable: true
+          description: Korisni sadržaj odgovora (oblik zavisi od rute).
+
+    ApiError:
+      type: object
+      description: Greška koju vraća kontroler preko trait-a ApiResponse.
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string, example: "This policy does not belong to you." }
+        errors: { nullable: true, example: null }
+
+    MessageError:
+      type: object
+      description: |
+        Greška koju vraća sam Laravel (abort, 404 model binding, 401 Unauthenticated).
+      properties:
+        message: { type: string, example: "Unauthenticated." }
+
+    ValidationError:
+      type: object
+      description: Odgovor Laravel validacije (HTTP 422).
+      properties:
+        message: { type: string }
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+      example:
+        message: "The email has already been taken."
+        errors:
+          email: ["The email has already been taken."]
+
+    # ----------------------------------------------------------------- modeli
+    User:
+      type: object
+      description: Korisnik aplikacije. Lozinka se nikada ne vraća u odgovoru.
+      properties:
+        id: { type: integer, example: 3 }
+        first_name: { type: string, example: "Ana" }
+        last_name: { type: string, example: "Jovanović" }
+        email: { type: string, format: email, example: "ana@travelsafe.test" }
+        role:
+          type: string
+          enum: [CLIENT, AGENT, ADMIN]
+          example: CLIENT
+        is_active: { type: boolean, example: true }
+        created_at: { type: string, format: date-time, example: "2026-08-24T10:15:00.000000Z" }
+        updated_at: { type: string, format: date-time, example: "2026-08-24T10:15:00.000000Z" }
+
+    InsurancePackage:
+      type: object
+      description: |
+        Paket osiguranja. Kolone `base_price` i `coverage_amount` su u bazi tipa
+        `decimal`, pa ih Laravel u JSON-u vraća kao string (npr. `"3.50"`).
+      properties:
+        id: { type: integer, example: 1 }
+        name: { type: string, example: "Basic" }
+        description:
+          type: string
+          nullable: true
+          example: "Osnovno pokriće za kratka putovanja — hitna medicinska pomoć."
+        base_price:
+          type: string
+          example: "3.50"
+          description: Osnovna dnevna cena po putniku.
+        coverage_amount:
+          type: string
+          example: "10000.00"
+          description: Iznos pokrića (osigurana suma).
+        is_active: { type: boolean, example: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Travel:
+      type: object
+      description: Putovanje koje klijent prijavljuje pri traženju osiguranja.
+      properties:
+        id: { type: integer, example: 1 }
+        destination_country: { type: string, example: "Grčka" }
+        start_date: { type: string, format: date-time, example: "2026-09-01T00:00:00.000000Z" }
+        end_date: { type: string, format: date-time, example: "2026-09-08T00:00:00.000000Z" }
+        travel_purpose:
+          type: string
+          enum: [TOURISM, BUSINESS, STUDY]
+          example: TOURISM
+        client_id: { type: integer, example: 3 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        insured_persons:
+          type: array
+          description: Učitava se uz putovanje (relacija `insuredPersons`).
+          items: { $ref: "#/components/schemas/InsuredPerson" }
+        policy:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Policy"
+        client:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/User"
+
+    InsuredPerson:
+      type: object
+      description: Osoba koja se osigurava u okviru jednog putovanja.
+      properties:
+        id: { type: integer, example: 1 }
+        first_name: { type: string, example: "Ana" }
+        last_name: { type: string, example: "Jovanović" }
+        date_of_birth: { type: string, format: date-time, example: "1995-04-12T00:00:00.000000Z" }
+        passport_number: { type: string, example: "RS1234567" }
+        travel_id: { type: integer, example: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Policy:
+      type: object
+      description: |
+        Zahtev za osiguranje, a nakon odobrenja i plaćanja — izdata polisa.
+        Životni ciklus statusa: `SUBMITTED` → `APPROVED` / `REJECTED` → `ACTIVE`.
+      properties:
+        id: { type: integer, example: 1 }
+        policy_number:
+          type: string
+          nullable: true
+          description: Dodeljuje se automatski tek pri odobrenju.
+          example: "TS-2026-A1B2C3"
+        status:
+          type: string
+          enum: [SUBMITTED, UNDER_REVIEW, APPROVED, REJECTED, PAYMENT_PENDING, ACTIVE, EXPIRED]
+          example: SUBMITTED
+        total_price:
+          type: string
+          nullable: true
+          description: Konačnu cenu unosi agent pri odobrenju.
+          example: "112.00"
+        rejection_reason:
+          type: string
+          nullable: true
+          example: null
+        client_id: { type: integer, example: 3 }
+        agent_id: { type: integer, nullable: true, example: null }
+        travel_id: { type: integer, example: 1 }
+        insurance_package_id: { type: integer, example: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        client:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/User"
+        agent:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/User"
+        travel:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Travel"
+        insurance_package:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/InsurancePackage"
+
+    AuthData:
+      type: object
+      description: Sadržaj polja `data` kod registracije i prijave.
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        token:
+          type: string
+          description: "Sanctum token koji se šalje u zaglavlju `Authorization: Bearer <token>`."
+          example: "5|kM3xQ0pB7vTz9YwLdN2aRcE1fGhJiKlOpQrStUvW"
+
+    Statistics:
+      type: object
+      description: Sadržaj polja `data` na ruti `/api/statistics`.
+      properties:
+        users_total: { type: integer, example: 3 }
+        clients_total: { type: integer, example: 1 }
+        agents_total: { type: integer, example: 1 }
+        packages_total: { type: integer, example: 3 }
+        active_packages_total: { type: integer, example: 3 }
+        policies_total: { type: integer, example: 1 }
+        policies_by_status:
+          type: object
+          description: Broj polisa po statusu (ključ je status).
+          additionalProperties: { type: integer }
+          example:
+            SUBMITTED: 1
+            ACTIVE: 2
+        active_revenue:
+          type: number
+          format: float
+          description: Zbir cena svih polisa u statusu ACTIVE.
+          example: 224.0
+
+  responses:
+    Unauthenticated:
+      description: Nedostaje ili je nevažeći Sanctum token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MessageError" }
+          example:
+            message: "Unauthenticated."
+    ForbiddenRole:
+      description: Prijavljeni korisnik nema potrebnu ulogu (middleware `role`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+          example:
+            success: false
+            message: "You do not have permission to perform this action."
+    NotFound:
+      description: Traženi zapis ne postoji (Laravel model binding).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MessageError" }
+          example:
+            message: "No query results for model [App\\Models\\Policy] 99"
+    ValidationFailed:
+      description: Validacija ulaznih podataka nije prošla.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ValidationError" }
+
+# Podrazumevano sve rute traže token; javne rute imaju "security: []".
+security:
+  - bearerAuth: []
+
+paths:
+  # ============================================================== AUTH
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Registracija novog korisnika (uloga CLIENT)
+      description: |
+        Javna ruta. Novi nalog uvek dobija ulogu **CLIENT** i odmah dobija token,
+        pa je korisnik prijavljen odmah nakon registracije.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [first_name, last_name, email, password, password_confirmation]
+              properties:
+                first_name: { type: string, maxLength: 100, example: "Marija" }
+                last_name: { type: string, maxLength: 100, example: "Petrović" }
+                email: { type: string, format: email, maxLength: 150, example: "marija@travelsafe.test" }
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+                  description: Najmanje 8 karaktera; mora se poklapati sa `password_confirmation`.
+                  example: "lozinka123"
+                password_confirmation:
+                  type: string
+                  format: password
+                  example: "lozinka123"
+      responses:
+        "201":
+          description: Nalog je kreiran, vraćaju se korisnik i token.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Registration successful" }
+                      data: { $ref: "#/components/schemas/AuthData" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Prijava korisnika
+      description: |
+        Javna ruta. Vraća korisnika i Sanctum token.
+        Demo nalozi (lozinka je za sve `password`) ponuđeni su kroz padajući spisak primera.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+            examples:
+              client:
+                summary: CLIENT (Ana)
+                value: { email: "ana@travelsafe.test", password: "password" }
+              agent:
+                summary: AGENT (Marko)
+                value: { email: "agent@travelsafe.test", password: "password" }
+              admin:
+                summary: ADMIN
+                value: { email: "admin@travelsafe.test", password: "password" }
+      responses:
+        "200":
+          description: Uspešna prijava.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Login successful" }
+                      data: { $ref: "#/components/schemas/AuthData" }
+        "401":
+          description: Pogrešan email ili lozinka.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+              example:
+                success: false
+                message: "Invalid email or password"
+                errors: null
+        "403":
+          description: Nalog je deaktiviran.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+              example:
+                success: false
+                message: "Your account has been deactivated."
+                errors: null
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Odjava (briše se samo trenutni token)
+      responses:
+        "200":
+          description: Token je obrisan.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Logout successful" }
+                      data: { nullable: true, example: null }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Podaci o trenutno prijavljenom korisniku
+      description: Frontend je koristi pri osvežavanju stranice da vrati stanje prijave.
+      responses:
+        "200":
+          description: Prijavljeni korisnik.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Current user" }
+                      data: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+
+  # ================================================== INSURANCE PACKAGES
+  /api/insurance-packages:
+    get:
+      tags: [Insurance Packages]
+      summary: Lista paketa osiguranja (javno)
+      description: |
+        Javna ruta. Neprijavljeni korisnici i korisnici koji nisu ADMIN vide samo
+        **aktivne** pakete; ADMIN vidi sve. Lista je sortirana po `base_price` rastuće.
+      security: []
+      responses:
+        "200":
+          description: Lista paketa.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Insurance packages" }
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/InsurancePackage" }
+    post:
+      tags: [Insurance Packages]
+      summary: Kreiranje paketa (ADMIN)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, base_price, coverage_amount]
+              properties:
+                name: { type: string, maxLength: 150, example: "Family" }
+                description: { type: string, nullable: true, example: "Paket za porodična putovanja." }
+                base_price: { type: number, minimum: 0, example: 7.5 }
+                coverage_amount: { type: number, minimum: 0, example: 50000 }
+                is_active: { type: boolean, example: true }
+      responses:
+        "201":
+          description: Paket je kreiran.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Insurance package created" }
+                      data: { $ref: "#/components/schemas/InsurancePackage" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ForbiddenRole" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /api/insurance-packages/{insurancePackage}:
+    parameters:
+      - name: insurancePackage
+        in: path
+        required: true
+        description: ID paketa osiguranja.
+        schema: { type: integer }
+        example: 1
+    get:
+      tags: [Insurance Packages]
+      summary: Detalji paketa (javno)
+      security: []
+      responses:
+        "200":
+          description: Traženi paket.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Insurance package details" }
+                      data: { $ref: "#/components/schemas/InsurancePackage" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Insurance Packages]
+      summary: Izmena paketa (ADMIN)
+      description: Sva polja su opciona (`sometimes`) — šalje se samo ono što se menja.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 150, example: "Basic Plus" }
+                description: { type: string, nullable: true }
+                base_price: { type: number, minimum: 0, example: 4.0 }
+                coverage_amount: { type: number, minimum: 0, example: 15000 }
+                is_active: { type: boolean, example: false }
+      responses:
+        "200":
+          description: Paket je izmenjen.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Insurance package updated" }
+                      data: { $ref: "#/components/schemas/InsurancePackage" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ForbiddenRole" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    delete:
+      tags: [Insurance Packages]
+      summary: Brisanje paketa (ADMIN)
+      responses:
+        "200":
+          description: Paket je obrisan.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Insurance package deleted" }
+                      data: { nullable: true, example: null }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ForbiddenRole" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ============================================================ TRAVELS
+  /api/travels:
+    get:
+      tags: [Travels]
+      summary: Lista putovanja
+      description: |
+        CLIENT vidi isključivo svoja putovanja, dok AGENT i ADMIN vide sva.
+        Uz svako putovanje učitavaju se putnici, polisa i klijent.
+      responses:
+        "200":
+          description: Lista putovanja (najnovija prva).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Travels list" }
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Travel" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+    post:
+      tags: [Travels]
+      summary: Kreiranje putovanja
+      description: Vlasnik (`client_id`) se uvek postavlja na prijavljenog korisnika.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination_country, start_date, end_date, travel_purpose]
+              properties:
+                destination_country: { type: string, maxLength: 100, example: "Grčka" }
+                start_date: { type: string, format: date, example: "2026-09-01" }
+                end_date:
+                  type: string
+                  format: date
+                  description: Ne sme biti pre datuma `start_date`.
+                  example: "2026-09-08"
+                travel_purpose:
+                  type: string
+                  enum: [TOURISM, BUSINESS, STUDY]
+                  example: TOURISM
+      responses:
+        "201":
+          description: Putovanje je kreirano.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Travel created" }
+                      data: { $ref: "#/components/schemas/Travel" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /api/travels/{travel}:
+    parameters:
+      - name: travel
+        in: path
+        required: true
+        description: ID putovanja.
+        schema: { type: integer }
+        example: 1
+    get:
+      tags: [Travels]
+      summary: Detalji putovanja
+      responses:
+        "200":
+          description: Putovanje sa putnicima, polisom i klijentom.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Travel details" }
+                      data: { $ref: "#/components/schemas/Travel" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Putovanje pripada drugom klijentu.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MessageError" }
+              example:
+                message: "This travel does not belong to you."
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Travels]
+      summary: Izmena putovanja
+      description: Sva polja su opciona; klijent sme da menja samo svoje putovanje.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                destination_country: { type: string, maxLength: 100, example: "Italija" }
+                start_date: { type: string, format: date, example: "2026-10-01" }
+                end_date: { type: string, format: date, example: "2026-10-10" }
+                travel_purpose:
+                  type: string
+                  enum: [TOURISM, BUSINESS, STUDY]
+                  example: BUSINESS
+      responses:
+        "200":
+          description: Putovanje je izmenjeno.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Travel updated" }
+                      data: { $ref: "#/components/schemas/Travel" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Putovanje pripada drugom klijentu.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MessageError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    delete:
+      tags: [Travels]
+      summary: Brisanje putovanja
+      description: Kaskadno briše i osigurane osobe i polisu vezanu za putovanje.
+      responses:
+        "200":
+          description: Putovanje je obrisano.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Travel deleted" }
+                      data: { nullable: true, example: null }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Putovanje pripada drugom klijentu.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MessageError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ==================================================== INSURED PERSONS
+  /api/travels/{travel}/insured-persons:
+    parameters:
+      - name: travel
+        in: path
+        required: true
+        description: ID putovanja na koje se putnik odnosi.
+        schema: { type: integer }
+        example: 1
+    get:
+      tags: [Insured Persons]
+      summary: Lista osiguranih osoba za putovanje
+      responses:
+        "200":
+          description: Putnici na datom putovanju.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Insured persons" }
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/InsuredPerson" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Putovanje pripada drugom klijentu.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MessageError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Insured Persons]
+      summary: Dodavanje osigurane osobe na putovanje
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [first_name, last_name, date_of_birth, passport_number]
+              properties:
+                first_name: { type: string, maxLength: 100, example: "Petar" }
+                last_name: { type: string, maxLength: 100, example: "Jovanović" }
+                date_of_birth:
+                  type: string
+                  format: date
+                  description: Mora biti pre današnjeg datuma.
+                  example: "1992-09-30"
+                passport_number:
+                  type: string
+                  maxLength: 50
+                  description: Jedinstven na nivou cele tabele `insured_persons`.
+                  example: "RS7654321"
+      responses:
+        "201":
+          description: Osigurana osoba je dodata.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Insured person added" }
+                      data: { $ref: "#/components/schemas/InsuredPerson" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Putovanje pripada drugom klijentu.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MessageError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /api/insured-persons/{insuredPerson}:
+    parameters:
+      - name: insuredPerson
+        in: path
+        required: true
+        description: ID osigurane osobe.
+        schema: { type: integer }
+        example: 1
+    get:
+      tags: [Insured Persons]
+      summary: Detalji osigurane osobe
+      responses:
+        "200":
+          description: Tražena osoba.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Insured person details" }
+                      data: { $ref: "#/components/schemas/InsuredPerson" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Osoba pripada tuđem putovanju.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MessageError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Insured Persons]
+      summary: Izmena podataka osigurane osobe
+      description: Sva polja su obavezna; provera jedinstvenosti pasoša ignoriše sam zapis koji se menja.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [first_name, last_name, date_of_birth, passport_number]
+              properties:
+                first_name: { type: string, maxLength: 100, example: "Petar" }
+                last_name: { type: string, maxLength: 100, example: "Jovanović" }
+                date_of_birth: { type: string, format: date, example: "1992-09-30" }
+                passport_number: { type: string, maxLength: 50, example: "RS7654321" }
+      responses:
+        "200":
+          description: Podaci su izmenjeni.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Insured person updated" }
+                      data: { $ref: "#/components/schemas/InsuredPerson" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Osoba pripada tuđem putovanju.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MessageError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    delete:
+      tags: [Insured Persons]
+      summary: Uklanjanje osigurane osobe
+      responses:
+        "200":
+          description: Osoba je uklonjena.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Insured person removed" }
+                      data: { nullable: true, example: null }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Osoba pripada tuđem putovanju.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MessageError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # =========================================================== POLICIES
+  /api/policies:
+    get:
+      tags: [Policies]
+      summary: Lista polisa
+      description: CLIENT vidi samo svoje polise; AGENT i ADMIN vide sve.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Opcioni filter po statusu polise.
+          schema:
+            type: string
+            enum: [SUBMITTED, UNDER_REVIEW, APPROVED, REJECTED, PAYMENT_PENDING, ACTIVE, EXPIRED]
+          example: SUBMITTED
+      responses:
+        "200":
+          description: Lista polisa (najnovije prve), sa učitanim relacijama.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Policies list" }
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Policy" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+    post:
+      tags: [Policies]
+      summary: Podnošenje zahteva za polisu (CLIENT)
+      description: |
+        Putovanje mora pripadati prijavljenom klijentu, ne sme već imati polisu
+        i mora imati bar jednu osiguranu osobu. Novi zahtev dobija status `SUBMITTED`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [travel_id, insurance_package_id]
+              properties:
+                travel_id: { type: integer, example: 1 }
+                insurance_package_id: { type: integer, example: 1 }
+      responses:
+        "201":
+          description: Zahtev je podnet.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Policy request submitted" }
+                      data: { $ref: "#/components/schemas/Policy" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Putovanje pripada drugom klijentu.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+              example:
+                success: false
+                message: "You can only insure your own travels."
+                errors: null
+        "422":
+          description: |
+            Putovanje već ima polisu, nema nijednog putnika, ili validacija nije prošla.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiError"
+                  - $ref: "#/components/schemas/ValidationError"
+              examples:
+                vec_ima_polisu:
+                  summary: Putovanje već ima polisu
+                  value: { success: false, message: "This travel already has a policy.", errors: null }
+                nema_putnika:
+                  summary: Nema nijedne osigurane osobe
+                  value: { success: false, message: "Add at least one insured person before submitting.", errors: null }
+
+  /api/policies/{policy}:
+    parameters:
+      - name: policy
+        in: path
+        required: true
+        description: ID polise.
+        schema: { type: integer }
+        example: 1
+    get:
+      tags: [Policies]
+      summary: Detalji polise
+      responses:
+        "200":
+          description: Polisa sa klijentom, agentom, putovanjem i paketom.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Policy details" }
+                      data: { $ref: "#/components/schemas/Policy" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Polisa pripada drugom klijentu.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MessageError" }
+              example:
+                message: "This policy does not belong to you."
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Policies]
+      summary: Promena izabranog paketa
+      description: Dozvoljeno samo dok je zahtev u statusu `SUBMITTED`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [insurance_package_id]
+              properties:
+                insurance_package_id: { type: integer, example: 2 }
+      responses:
+        "200":
+          description: Paket je promenjen.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Policy updated" }
+                      data: { $ref: "#/components/schemas/Policy" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Polisa pripada drugom klijentu.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: Polisa nije u statusu SUBMITTED, ili validacija nije prošla.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+              example:
+                success: false
+                message: "Only submitted requests can be modified."
+                errors: null
+    delete:
+      tags: [Policies]
+      summary: Otkazivanje/brisanje polise
+      description: |
+        CLIENT sme da obriše samo svoj zahtev koji je još u statusu `SUBMITTED`;
+        ADMIN i AGENT mogu da obrišu bilo koju polisu.
+      responses:
+        "200":
+          description: Polisa je obrisana.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Policy deleted" }
+                      data: { nullable: true, example: null }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Tuđa polisa ili zahtev više nije u statusu SUBMITTED.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+              example:
+                success: false
+                message: "You can only cancel your own pending requests."
+                errors: null
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/policies/{policy}/approve:
+    parameters:
+      - name: policy
+        in: path
+        required: true
+        description: ID polise koja se odobrava.
+        schema: { type: integer }
+        example: 1
+    patch:
+      tags: [Policies]
+      summary: Odobravanje zahteva (AGENT ili ADMIN)
+      description: |
+        Agent unosi konačnu cenu. Sistem automatski dodeljuje broj polise
+        (oblik `TS-<godina>-<6 znakova>`), upisuje agenta i briše eventualni raniji
+        razlog odbijanja. Status prelazi u `APPROVED`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [total_price]
+              properties:
+                total_price: { type: number, minimum: 0, example: 112.0 }
+      responses:
+        "200":
+          description: Zahtev je odobren.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Policy approved" }
+                      data: { $ref: "#/components/schemas/Policy" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ForbiddenRole" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: Polisa nije u statusu SUBMITTED/UNDER_REVIEW, ili validacija nije prošla.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+              example:
+                success: false
+                message: "Only submitted requests can be approved."
+                errors: null
+
+  /api/policies/{policy}/reject:
+    parameters:
+      - name: policy
+        in: path
+        required: true
+        description: ID polise koja se odbija.
+        schema: { type: integer }
+        example: 1
+    patch:
+      tags: [Policies]
+      summary: Odbijanje zahteva (AGENT ili ADMIN)
+      description: Razlog odbijanja je obavezan i vidi ga klijent. Status prelazi u `REJECTED`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rejection_reason]
+              properties:
+                rejection_reason:
+                  type: string
+                  maxLength: 500
+                  example: "Destinacija nije pokrivena izabranim paketom."
+      responses:
+        "200":
+          description: Zahtev je odbijen.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Policy rejected" }
+                      data: { $ref: "#/components/schemas/Policy" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ForbiddenRole" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: Polisa nije u statusu SUBMITTED/UNDER_REVIEW, ili validacija nije prošla.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+              example:
+                success: false
+                message: "Only submitted requests can be rejected."
+                errors: null
+
+  /api/policies/{policy}/pay:
+    parameters:
+      - name: policy
+        in: path
+        required: true
+        description: ID odobrene polise koja se plaća.
+        schema: { type: integer }
+        example: 1
+    patch:
+      tags: [Policies]
+      summary: Simulacija plaćanja (CLIENT)
+      description: |
+        Platiti može samo vlasnik polise i samo ako je polisa u statusu `APPROVED`.
+        Nakon plaćanja status prelazi u `ACTIVE`. Telo zahteva se ne šalje.
+      responses:
+        "200":
+          description: Plaćanje je uspelo, polisa je aktivna.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Payment successful, policy is now active" }
+                      data: { $ref: "#/components/schemas/Policy" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: Polisa pripada drugom korisniku.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+              example:
+                success: false
+                message: "This policy does not belong to you."
+                errors: null
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: Polisa nije u statusu APPROVED.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+              example:
+                success: false
+                message: "Only approved policies can be paid."
+                errors: null
+
+  # ====================================================== USERS (ADMIN)
+  /api/users:
+    get:
+      tags: [Users]
+      summary: Lista svih korisnika (ADMIN)
+      responses:
+        "200":
+          description: Korisnici, najnoviji prvi.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Users list" }
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ForbiddenRole" }
+
+  /api/users/{user}:
+    parameters:
+      - name: user
+        in: path
+        required: true
+        description: ID korisnika.
+        schema: { type: integer }
+        example: 3
+    get:
+      tags: [Users]
+      summary: Detalji korisnika (ADMIN)
+      responses:
+        "200":
+          description: Traženi korisnik.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "User details" }
+                      data: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ForbiddenRole" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/users/{user}/role:
+    parameters:
+      - name: user
+        in: path
+        required: true
+        description: ID korisnika kome se menja uloga.
+        schema: { type: integer }
+        example: 3
+    patch:
+      tags: [Users]
+      summary: Promena uloge korisnika (ADMIN)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [CLIENT, AGENT, ADMIN]
+                  example: AGENT
+      responses:
+        "200":
+          description: Uloga je promenjena.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "User role updated" }
+                      data: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ForbiddenRole" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /api/users/{user}/toggle-active:
+    parameters:
+      - name: user
+        in: path
+        required: true
+        description: ID korisnika čiji se nalog aktivira/deaktivira.
+        schema: { type: integer }
+        example: 3
+    patch:
+      tags: [Users]
+      summary: Aktivacija/deaktivacija naloga (ADMIN)
+      description: |
+        Prekidač — poziv obrće trenutno stanje polja `is_active`.
+        Administrator ne može da promeni status sopstvenog naloga.
+        Telo zahteva se ne šalje.
+      responses:
+        "200":
+          description: Status naloga je promenjen.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "User deactivated" }
+                      data: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ForbiddenRole" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: Pokušaj promene statusa sopstvenog naloga.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+              example:
+                success: false
+                message: "You cannot change the status of your own account."
+                errors: null
+
+  # ================================================= STATISTICS (ADMIN)
+  /api/statistics:
+    get:
+      tags: [Statistics]
+      summary: Statistika aplikacije (ADMIN)
+      description: Zbirni podaci za administratorsku kontrolnu tablu.
+      responses:
+        "200":
+          description: Statistika.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      message: { type: string, example: "Application statistics" }
+                      data: { $ref: "#/components/schemas/Statistics" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ForbiddenRole" }
