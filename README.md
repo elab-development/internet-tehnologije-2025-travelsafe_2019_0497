@@ -1,13 +1,13 @@
-# TravelSafe — web aplikacija za putno osiguranje
+# TravelSafe, web aplikacija za putno osiguranje
 
 Full-stack aplikacija za onlajn izdavanje putnog osiguranja. Sastoji se iz **dve odvojene aplikacije**:
 
-- **`backend/`** — Laravel 10 REST API (PHP, Eloquent ORM, Sanctum autentifikacija, MySQL)
-- **`frontend/`** — React 19 SPA (Create React App, React Router, Axios, Tailwind CSS)
+- **`backend/`**, Laravel 10 REST API (PHP, Eloquent ORM, Sanctum autentifikacija, MySQL)
+- **`frontend/`**, React 19 SPA (Create React App, React Router, Axios, Tailwind CSS)
 
 React šalje HTTP zahteve Laravel API-ju; Laravel obrađuje poslovnu logiku i pristupa bazi.
 
-> Kod je pisan na engleskom, a komentari koji objašnjavaju delove koda na srpskom.
+Kod je pisan na engleskom, a komentari koji objašnjavaju delove koda na srpskom.
 
 ---
 
@@ -23,9 +23,9 @@ React šalje HTTP zahteve Laravel API-ju; Laravel obrađuje poslovnu logiku i pr
 
 ## Korisničke uloge
 
-- **CLIENT** — pregleda pakete, unosi putovanja i putnike, podnosi zahteve, simulira plaćanje.
-- **AGENT** — pregleda pristigle zahteve, odobrava/odbija ih i unosi konačnu cenu.
-- **ADMIN** — upravlja korisnicima i paketima, vidi sve polise i osnovnu statistiku.
+- **CLIENT**, pregleda pakete, unosi putovanja i putnike, podnosi zahteve, simulira plaćanje.
+- **AGENT**, pregleda pristigle zahteve, odobrava/odbija ih i unosi konačnu cenu.
+- **ADMIN**, upravlja korisnicima i paketima, vidi sve polise i osnovnu statistiku.
 
 ---
 
@@ -41,7 +41,7 @@ Za klasično lokalno pokretanje bez Dockera:
 - Node.js >= 24 i npm
 - MySQL (npr. iz XAMPP-a)
 
-## Pokretanje bez Dockera — Backend (Laravel)
+## Pokretanje bez Dockera, Backend (Laravel)
 
 ```bash
 cd backend
@@ -60,7 +60,7 @@ php artisan migrate --seed
 php artisan serve
 ```
 
-## Pokretanje bez Dockera — Frontend (React)
+## Pokretanje bez Dockera, Frontend (React)
 
 ```bash
 cd frontend
@@ -112,13 +112,13 @@ docker compose down -v
 
 `docker-compose.yml` opisuje tri servisa:
 
-- **`db`** — zvanična slika `mysql:8.0` sa bazom `travelsafe`. Podaci se čuvaju u
+- **`db`**, zvanična slika `mysql:8.0` sa bazom `travelsafe`. Podaci se čuvaju u
   Docker volume-u `travelsafe-db-data`, pa preživljavaju gašenje kontejnera.
   Port je mapiran na `3307` da ne bi bilo sudara sa lokalnim MySQL-om iz XAMPP-a.
-- **`backend`** — slika iz `backend/Dockerfile` (PHP 8.2 + Composer + `mysql-client`).
+- **`backend`**, slika iz `backend/Dockerfile` (PHP 8.2 + Composer + `mysql-client`).
   Skripta `backend/docker/entrypoint.sh` izvršava se pri **svakom** pokretanju
   kontejnera i prolazi kroz šest koraka opisanih ispod.
-- **`frontend`** — slika iz `frontend/Dockerfile`, u dve faze: prvo `npm run build`
+- **`frontend`**, slika iz `frontend/Dockerfile`, u dve faze: prvo `npm run build`
   (Node), zatim se dobijeni statički fajlovi serviraju kroz `nginx`. Konfiguracija
   `frontend/docker/nginx.conf` vraća `index.html` za svaku nepoznatu putanju,
   jer React Router radi na strani pregledača.
@@ -127,23 +127,21 @@ docker compose down -v
 
 Ulazna skripta backend kontejnera radi sledeće:
 
-1. **Čeka bazu** — `mysqladmin ping --skip-ssl` u petlji, dok MySQL ne prihvati konekciju.
-2. **Priprema `.env`** — kopira `.env.example` i u njega upisuje `DB_*`, `APP_URL`,
+1. **Čeka bazu**, `mysqladmin ping --skip-ssl` u petlji, dok MySQL ne prihvati konekciju.
+2. **Priprema `.env`**, kopira `.env.example` i u njega upisuje `DB_*`, `APP_URL`,
    `FRONTEND_URL` i `CORS_ALLOWED_ORIGINS` vrednosti iz `docker-compose.yml`.
-3. **Čisti keš** — `config:clear`, `cache:clear`, `route:clear`, `view:clear`.
-4. **Generiše `APP_KEY`** — `php artisan key:generate --force`.
-5. **Migrira i puni bazu** — `php artisan migrate:fresh --seed --force`.
-6. **Pokreće server** — `php artisan serve --host=0.0.0.0 --port=8000`.
+3. **Čisti keš**, `config:clear`, `cache:clear`, `route:clear`, `view:clear`.
+4. **Generiše `APP_KEY`**, `php artisan key:generate --force`.
+5. **Migrira i puni bazu**, `php artisan migrate:fresh --seed --force`.
+6. **Pokreće server**, `php artisan serve --host=0.0.0.0 --port=8000`.
 
-> **Važno:** zbog koraka 5 svako pokretanje backend kontejnera **briše sve unete
-> podatke** i vraća bazu na demo sadržaj iz `DatabaseSeeder` klase. Takvo ponašanje
-> je namerno — svaki član tima i nastavnik dobijaju isto, unapred poznato stanje
-> sistema. Ako želite da sačuvate unete podatke između pokretanja, u
-> `backend/docker/entrypoint.sh` zamenite `migrate:fresh --seed` sa `migrate`.
+Zbog petog koraka svako pokretanje backend kontejnera vraća bazu na demo sadržaj iz
+klase `DatabaseSeeder`, pa svi dobijaju isto, unapred poznato stanje sistema. Ako
+treba sačuvati unete podatke između pokretanja, u `backend/docker/entrypoint.sh`
+zameniti `migrate:fresh --seed` sa `migrate`.
 
 Posle seed-a baza sadrži pet korisnika, četiri paketa osiguranja (od kojih je jedan
-povučen iz ponude) i sedam polisa raspoređenih po svim statusima životnog ciklusa —
-dve aktivne, jednu odobrenu koja čeka plaćanje, jednu odbijenu i tri podneta zahteva.
+povučen iz ponude) i sedam polisa raspoređenih po svim statusima životnog ciklusa, dve aktivne, jednu odobrenu koja čeka plaćanje, jednu odbijenu i tri podneta zahteva.
 
 Korak 2 postoji zbog jedne osobenosti Laravela: kada `.env` datoteka postoji,
 `php artisan serve` detetu procesu prosleđuje samo ograničen skup promenljivih
@@ -187,44 +185,6 @@ generiše sam Laravel (validacija 422, `Unauthenticated.` 401, 404) vraćaju kra
 
 ---
 
-## CORS zaštita
-
-React (`:3000`) i Laravel (`:8000`) su različiti origin-i, pa je svaki poziv iz
-pregledača cross-origin. Pre pravog zahteva pregledač šalje **preflight** (`OPTIONS`)
-i pita server sme li da pošalje pravi zahtev.
-
-Na to odgovara globalni middleware `Illuminate\Http\Middleware\HandleCors`
-(registrovan u `backend/app/Http/Kernel.php`), a pravila čita iz `backend/config/cors.php`:
-
-| Podešavanje | Vrednost |
-|-------------|----------|
-| `paths` | `api/*` — samo API rute |
-| `allowed_methods` | `GET, POST, PUT, PATCH, DELETE, OPTIONS` |
-| `allowed_origins` | iz `.env` (`FRONTEND_URL` + `CORS_ALLOWED_ORIGINS`) |
-| `allowed_origins_patterns` | `localhost` / `127.0.0.1` na portovima 3000-3009 |
-| `allowed_headers` | `Accept, Authorization, Content-Type, Origin, X-Requested-With` |
-| `max_age` | 3600 (pregledač kešira preflight jedan sat) |
-| `supports_credentials` | `false` — aplikacija koristi Bearer token, ne kolačiće |
-
-Dozvoljene adrese se podešavaju u `backend/.env`:
-
-```
-FRONTEND_URL=http://localhost:3000
-CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-```
-
-Zaštita znači da su origin-i, metode i zaglavlja **eksplicitno nabrojani** — sve
-ostalo pregledač odbija. Provera sa komandne linije:
-
-```bash
-curl -i -X OPTIONS http://localhost:8000/api/auth/login -H "Origin: http://localhost:3000" -H "Access-Control-Request-Method: POST"
-```
-
-Sa dozvoljene adrese odgovor sadrži `Access-Control-Allow-Origin: http://localhost:3000`;
-sa bilo koje druge adrese tog zaglavlja nema, pa pregledač blokira poziv.
-
----
-
 ## Demo nalozi (lozinka: `password`)
 
 | Uloga | Email |
@@ -237,7 +197,7 @@ sa bilo koje druge adrese tog zaglavlja nema, pa pregledač blokira poziv.
 
 ## Struktura backenda
 
-- **Modeli** (`app/Models`): `User`, `InsurancePackage`, `Travel`, `InsuredPerson`, `Policy` — povezani Eloquent relacijama.
+- **Modeli** (`app/Models`): `User`, `InsurancePackage`, `Travel`, `InsuredPerson`, `Policy`, povezani Eloquent relacijama.
 - **Migracije** (`database/migrations`): kreiranje tabela, dodavanje kolona (`is_active`, `rejection_reason`), strani ključevi + jedinstvena ograničenja, dodavanje indeksa.
 - **Middleware**: `auth:sanctum` (autentifikacija) + `RoleMiddleware` (`role:ADMIN`, `role:AGENT,ADMIN`).
 - **Kontroleri** (`app/Http/Controllers/Api`): `AuthController`, `UserController`, `InsurancePackageController`, `TravelController`, `InsuredPersonController`, `PolicyController`, `StatisticsController`.
