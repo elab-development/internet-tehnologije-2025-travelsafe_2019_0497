@@ -241,6 +241,11 @@ src/
 
 ## Glavni tok aplikacije
 
+![Životni ciklus polise](docs/policy-lifecycle.png)
+
+Dijagram prikazuje dozvoljene prelaze polise kroz statuse. Svaki prelaz izvodi
+tačno jedna uloga, a kontroler odbija prelaz iz statusa koji nije predviđen.
+
 1. Korisnik se registruje i prijavljuje (React → Laravel, dobija Sanctum token).
 2. Klijent bira paket, unosi putovanje i osigurane osobe (uz automatski obračun okvirne cene).
 3. Podaci se šalju API-ju koji kreira putovanje, putnike i polisu (status `SUBMITTED`).
