@@ -7,7 +7,7 @@ FROM php:8.2-cli
 # unzip i git su potrebni Composeru za raspakivanje paketa,
 # a pdo_mysql je PHP ekstenzija za rad sa MySQL bazom.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git unzip \
+    && apt-get install -y --no-install-recommends git unzip default-mysql-client \
     && rm -rf /var/lib/apt/lists/* \
     && docker-php-ext-install pdo_mysql
 
