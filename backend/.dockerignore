@@ -1,0 +1,17 @@
+# Zavisnosti se instaliraju unutar slike.
+vendor
+node_modules
+
+# Lokalna podesavanja — u Dockeru se vrednosti prosledjuju kroz docker-compose.yml.
+.env
+
+# Lokalni logovi i kes.
+storage/logs/*.log
+storage/framework/cache/data/*
+storage/framework/sessions/*
+storage/framework/views/*
+
+.git
+.gitignore
+Dockerfile
+.dockerignore

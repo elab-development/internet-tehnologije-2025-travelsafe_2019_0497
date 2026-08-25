@@ -1,0 +1,14 @@
+# Zavisnosti se instaliraju unutar slike.
+node_modules
+
+# Rezultat lokalnog build-a.
+build
+
+# Lokalna podesavanja — u Dockeru se koristi build argument REACT_APP_API_URL.
+.env
+
+qa-screenshots
+.git
+.gitignore
+Dockerfile
+.dockerignore
