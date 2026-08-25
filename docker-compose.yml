@@ -32,6 +32,8 @@ services:
       retries: 20
 
   # ------------------------ BACKEND (Laravel) -------------------------
+  # Pri svakom pokretanju entrypoint skripta ceka bazu, cisti kes i izvrsava
+  # migrate:fresh --seed, pa backend uvek krece od istog demo stanja.
   backend:
     build: ./backend
     container_name: travelsafe-backend
@@ -43,7 +45,6 @@ services:
       APP_NAME: TravelSafe
       APP_ENV: local
       APP_DEBUG: "true"
-      APP_KEY: base64:86fBnDhmQy26Mf5UeU2ToXmQosUNfEWCeIp8taiHHz0=
       APP_URL: http://localhost:8000
 
       # Naziv servisa "db" je ujedno i hostname baze unutar Docker mreze.
