@@ -115,13 +115,40 @@ docker compose down -v
 - **`db`** — zvanična slika `mysql:8.0` sa bazom `travelsafe`. Podaci se čuvaju u
   Docker volume-u `travelsafe-db-data`, pa preživljavaju gašenje kontejnera.
   Port je mapiran na `3307` da ne bi bilo sudara sa lokalnim MySQL-om iz XAMPP-a.
-- **`backend`** — slika iz `backend/Dockerfile` (PHP 8.2 + Composer + `php artisan serve`).
-  Skripta `backend/docker/entrypoint.sh` sačeka da baza počne da prihvata konekcije,
-  pokrene migracije, a ako je baza prazna ubaci i demo podatke (seed).
+- **`backend`** — slika iz `backend/Dockerfile` (PHP 8.2 + Composer + `mysql-client`).
+  Skripta `backend/docker/entrypoint.sh` izvršava se pri **svakom** pokretanju
+  kontejnera i prolazi kroz šest koraka opisanih ispod.
 - **`frontend`** — slika iz `frontend/Dockerfile`, u dve faze: prvo `npm run build`
   (Node), zatim se dobijeni statički fajlovi serviraju kroz `nginx`. Konfiguracija
   `frontend/docker/nginx.conf` vraća `index.html` za svaku nepoznatu putanju,
   jer React Router radi na strani pregledača.
+
+### Migracije i seed pri svakom pokretanju
+
+Ulazna skripta backend kontejnera radi sledeće:
+
+1. **Čeka bazu** — `mysqladmin ping --skip-ssl` u petlji, dok MySQL ne prihvati konekciju.
+2. **Priprema `.env`** — kopira `.env.example` i u njega upisuje `DB_*`, `APP_URL`,
+   `FRONTEND_URL` i `CORS_ALLOWED_ORIGINS` vrednosti iz `docker-compose.yml`.
+3. **Čisti keš** — `config:clear`, `cache:clear`, `route:clear`, `view:clear`.
+4. **Generiše `APP_KEY`** — `php artisan key:generate --force`.
+5. **Migrira i puni bazu** — `php artisan migrate:fresh --seed --force`.
+6. **Pokreće server** — `php artisan serve --host=0.0.0.0 --port=8000`.
+
+> **Važno:** zbog koraka 5 svako pokretanje backend kontejnera **briše sve unete
+> podatke** i vraća bazu na demo sadržaj iz `DatabaseSeeder` klase. Takvo ponašanje
+> je namerno — svaki član tima i nastavnik dobijaju isto, unapred poznato stanje
+> sistema. Ako želite da sačuvate unete podatke između pokretanja, u
+> `backend/docker/entrypoint.sh` zamenite `migrate:fresh --seed` sa `migrate`.
+
+Posle seed-a baza sadrži pet korisnika, četiri paketa osiguranja (od kojih je jedan
+povučen iz ponude) i sedam polisa raspoređenih po svim statusima životnog ciklusa —
+dve aktivne, jednu odobrenu koja čeka plaćanje, jednu odbijenu i tri podneta zahteva.
+
+Korak 2 postoji zbog jedne osobenosti Laravela: kada `.env` datoteka postoji,
+`php artisan serve` detetu procesu prosleđuje samo ograničen skup promenljivih
+okruženja, pa bi server čitao podrazumevani `DB_HOST=127.0.0.1` umesto vrednosti
+iz `docker-compose.yml`.
 
 Adresa API-ja se u React build ugrađuje kroz build argument `REACT_APP_API_URL`
 (CRA čita `REACT_APP_*` promenljive u trenutku build-a, ne pri pokretanju), pa se
@@ -216,7 +243,7 @@ sa bilo koje druge adrese tog zaglavlja nema, pa pregledač blokira poziv.
 - **Kontroleri** (`app/Http/Controllers/Api`): `AuthController`, `UserController`, `InsurancePackageController`, `TravelController`, `InsuredPersonController`, `PolicyController`, `StatisticsController`.
 - **CORS** (`config/cors.php`): eksplicitno nabrojani dozvoljeni origin-i, metode i zaglavlja.
 - **API dokumentacija** (`public/api-docs`): `openapi.yaml` + Swagger UI stranica.
-- **Docker** (`Dockerfile`, `docker/entrypoint.sh`): slika sa PHP-om i automatskim migracijama.
+- **Docker** (`Dockerfile`, `docker/entrypoint.sh`): slika sa PHP-om; migracije i seed se izvršavaju pri svakom pokretanju.
 - Svi odgovori su u JSON formatu, oblika `{ success, message, data }`.
 
 ### Glavne API rute
