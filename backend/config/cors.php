@@ -12,7 +12,7 @@
 | Na taj preflight odgovara globalni middleware Illuminate\Http\Middleware\HandleCors,
 | registrovan u app/Http/Kernel.php, a pravila čita iz ovog fajla.
 |
-| Zaštita znači da su origin-i, metode i zaglavlja EKSPLICITNO nabrojani —
+| Zaštita znači da su origin-i, metode i zaglavlja EKSPLICITNO nabrojani,
 | zahtev sa bilo koje druge adrese browser odbija.
 |
 */
@@ -25,8 +25,10 @@ $configuredOrigins = array_map(
 );
 
 // FRONTEND_URL se dodaje na listu da ne bi morao dva puta da se upisuje.
+// APP_URL se dodaje zato sto Swagger UI stranicu servira sam API, pa pozivi iz
+// nje polaze sa adrese backenda, a ne sa adrese React aplikacije.
 $allowedOrigins = array_values(array_unique(array_filter(
-    array_merge([env('FRONTEND_URL')], $configuredOrigins)
+    array_merge([env('FRONTEND_URL'), env('APP_URL')], $configuredOrigins)
 )));
 
 return [
@@ -34,15 +36,18 @@ return [
     // Rute na koje se CORS pravila primenjuju (samo API, ne i statički fajlovi).
     'paths' => ['api/*'],
 
-    // Dozvoljene HTTP metode — tačno one koje aplikacija zaista koristi.
+    // Dozvoljene HTTP metode, tačno one koje aplikacija zaista koristi.
     'allowed_methods' => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 
     // Dozvoljeni origin-i (adresa frontenda). Sve ostalo browser blokira.
     'allowed_origins' => $allowedOrigins,
 
     // Create React App uzima sledeci slobodan port, pa dozvoljavamo localhost/127.0.0.1 na 3000-3009.
+    // Port 8000 je adresa samog API-ja, sa koje se otvara Swagger UI stranica; pregledac
+    // adrese "localhost" i "127.0.0.1" smatra razlicitim izvorima, pa su navedene obe.
     'allowed_origins_patterns' => [
         '#^http://(localhost|127\.0\.0\.1):300[0-9]$#',
+        '#^http://(localhost|127\.0\.0\.1):8000$#',
     ],
 
     // Dozvoljena zaglavlja koja frontend sme da pošalje (Authorization nosi Sanctum token).

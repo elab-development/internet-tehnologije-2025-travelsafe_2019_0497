@@ -32,6 +32,8 @@ info:
     6. Login kao CLIENT → `PATCH /api/policies/{policy}/pay` → status `ACTIVE`.
 
 servers:
+  - url: /
+    description: Isti server sa koga je otvorena ova stranica (bez CORS provere)
   - url: http://localhost:8000
     description: Lokalni razvojni server (php artisan serve / Docker)
   - url: http://127.0.0.1:8000
